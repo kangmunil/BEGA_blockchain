@@ -1,0 +1,62 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'bega-l2'
+    environment: 'production'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "/etc/prometheus/alert_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # L2 Geth (Execution Layer)
+  - job_name: 'l2-geth'
+    static_configs:
+      - targets: ['l2-geth:6060']
+        labels:
+          service: 'l2-geth'
+          layer: 'execution'
+    metrics_path: '/debug/metrics/prometheus'
+
+  # L2 Node (Consensus/Rollup Node)
+  - job_name: 'l2-node'
+    static_configs:
+      - targets: ['l2-node:7300']
+        labels:
+          service: 'l2-node'
+          layer: 'consensus'
+    metrics_path: '/metrics'
+
+  # L2 Batcher
+  - job_name: 'l2-batcher'
+    static_configs:
+      - targets: ['l2-batcher:7301']
+        labels:
+          service: 'l2-batcher'
+          layer: 'data-availability'
+    metrics_path: '/metrics'
+
+  # Gas Oracle Bot (future enhancement)
+  # - job_name: 'gas-oracle'
+  #   static_configs:
+  #     - targets: ['gas-oracle:8080']
+  #       labels:
+  #         service: 'gas-oracle'
+  #         layer: 'automation'
+  #   metrics_path: '/metrics'
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+        labels:
+          service: 'prometheus'

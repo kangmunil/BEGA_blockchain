@@ -21,6 +21,7 @@ services:
     ports:
       - "8545:8545"  # HTTP RPC
       - "8546:8546"  # WebSocket
+      - "6060:6060"  # Metrics
     volumes:
       - ./data:/db
       - ./secrets:/secrets
@@ -32,6 +33,7 @@ services:
       --syncmode=full --gcmode=archive --nodiscover --maxpeers=0
       --networkid=${L2_CHAIN_ID:-12345678}
       --rollup.disabletxpoolgossip=true
+      --metrics --metrics.addr=0.0.0.0 --metrics.port=6060
 
   # 3. Consensus Client (op-node)
   l2-node:
@@ -42,6 +44,7 @@ services:
     ports:
       - "8547:8547"  # Node RPC
       - "9003:9003"  # P2P
+      - "7300:7300"  # Metrics
     volumes:
       - ./config:/config
       - ./secrets:/secrets
@@ -60,6 +63,7 @@ services:
       --sequencer.enabled
       --sequencer.l1-confs=3
       --verifier.l1-confs=3
+      --metrics.enabled --metrics.addr=0.0.0.0 --metrics.port=7300
 
   # 4. Batcher (submits transaction batches to Celestia/L1)
   l2-batcher:
@@ -67,6 +71,8 @@ services:
     restart: unless-stopped
     depends_on:
       - l2-node
+    ports:
+      - "7301:7301"  # Metrics
     volumes:
       - ./secrets:/secrets
     extra_hosts:
@@ -88,6 +94,7 @@ services:
       --altda.enabled=true
       --altda.da-service=true
       --altda.da-server=${DA_SERVER_URL}
+      --metrics.enabled --metrics.addr=0.0.0.0 --metrics.port=7301
 
   # 5. Proposer (submits L2 state roots to L1)
   l2-proposer:
@@ -122,6 +129,7 @@ services:
       - OPERATOR_PRIVATE_KEY=${OPERATOR_PRIVATE_KEY}
       - SYSTEM_CONFIG_ADDRESS=${SYSTEM_CONFIG_ADDRESS}
       - UPDATE_THRESHOLD=${UPDATE_THRESHOLD:-5.0}
+      - DA_FACTOR=${DA_FACTOR:-0.1}
       - SAFETY_MARGIN=${SAFETY_MARGIN:-1.1}
       - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
       - COINGECKO_API_KEY=${COINGECKO_API_KEY}
@@ -228,6 +236,51 @@ services:
       - NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=BEGA
       - NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18
       - NEXT_PUBLIC_API_SPEC_URL=https://raw.githubusercontent.com/blockscout/blockscout-api-v2-swagger/main/swagger.yaml
+
+  # 11. Prometheus (Metrics Collection)
+  prometheus:
+    image: prom/prometheus:latest
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml
+      - ./data/prometheus:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+
+  # 12. Alertmanager (Alert Management)
+  alertmanager:
+    image: prom/alertmanager:latest
+    restart: unless-stopped
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+      - ./data/alertmanager:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+
+  # 13. Grafana (Metrics Visualization)
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./data/grafana:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=http://localhost:3001
 
 networks:
   default:

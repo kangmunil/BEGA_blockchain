@@ -1,0 +1,118 @@
+groups:
+  - name: bega_l2_critical
+    interval: 30s
+    rules:
+      # Batcher Low ETH Balance Alert
+      - alert: BatcherLowETH
+        expr: eth_balance{account="batcher"} < 0.1
+        for: 5m
+        labels:
+          severity: critical
+          component: batcher
+        annotations:
+          summary: "Batcher ETH balance critically low"
+          description: "Batcher wallet has {{ $value }} ETH remaining. Need to refill soon to continue batch submissions to L1."
+
+      # Batcher Transaction Failure Alert
+      - alert: BatchSubmissionFailed
+        expr: rate(batcher_tx_failed_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+          component: batcher
+        annotations:
+          summary: "Batcher failing to submit batches to L1"
+          description: "Batcher has failed {{ $value }} transactions in the last 5 minutes. Check L1 gas prices and batcher logs."
+
+      # L2 Geth Node Down
+      - alert: L2GethDown
+        expr: up{job="l2-geth"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: l2-geth
+        annotations:
+          summary: "L2 Geth node is down"
+          description: "L2 Geth execution layer is not responding. Users cannot submit transactions."
+
+      # L2 Rollup Node Down
+      - alert: L2NodeDown
+        expr: up{job="l2-node"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: l2-node
+        annotations:
+          summary: "L2 Rollup node is down"
+          description: "L2 consensus/rollup node is not responding. Chain may not be deriving new L2 blocks."
+
+      # Batcher Service Down
+      - alert: BatcherDown
+        expr: up{job="l2-batcher"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          component: l2-batcher
+        annotations:
+          summary: "Batcher service is down"
+          description: "Batcher is not running. L2 transactions will not be posted to L1."
+
+  - name: bega_l2_warning
+    interval: 60s
+    rules:
+      # High L1 Gas Price Warning
+      - alert: HighL1GasPrice
+        expr: l1_gas_price_gwei > 50
+        for: 10m
+        labels:
+          severity: warning
+          component: batcher
+        annotations:
+          summary: "L1 gas price unusually high"
+          description: "L1 gas price is {{ $value }} gwei. Batch submissions are becoming expensive."
+
+      # L2 Block Production Stalled
+      - alert: L2BlockProductionSlow
+        expr: rate(l2_block_number[5m]) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+          component: l2-geth
+        annotations:
+          summary: "L2 block production has slowed down"
+          description: "L2 is producing blocks at {{ $value }} blocks/sec. Expected ~0.5 blocks/sec (1 block per 2 seconds)."
+
+      # Peer Count Low
+      - alert: LowPeerCount
+        expr: p2p_peers < 3
+        for: 10m
+        labels:
+          severity: warning
+          component: l2-node
+        annotations:
+          summary: "L2 node has few peers"
+          description: "L2 node has only {{ $value }} peers. This may indicate network connectivity issues."
+
+      # High Memory Usage
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes > 8e9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Process using high memory"
+          description: "Process {{ $labels.job }} is using {{ $value | humanize }}B of memory."
+
+  - name: bega_l2_info
+    interval: 120s
+    rules:
+      # Chain Sync Status
+      - alert: L2NotSynced
+        expr: op_node_sync_status != 1
+        for: 5m
+        labels:
+          severity: info
+          component: l2-node
+        annotations:
+          summary: "L2 node is not fully synced"
+          description: "L2 rollup node sync status is {{ $value }}. May be catching up to L1."

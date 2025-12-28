@@ -47,7 +47,7 @@ type Config struct {
 }
 
 func main() {
-	log.Println("🚀 BEGA Gas Price Updater Bot Starting...")
+	log.Println("[INIT] BEGA Gas Price Updater Bot Starting...")
 
 	// Load configuration
 	config, err := loadConfig()
@@ -74,12 +74,12 @@ func main() {
 		log.Fatalf("Failed to get chain ID: %v", err)
 	}
 
-	log.Printf("✅ Connected to L1 (Chain ID: %s)", chainID.String())
-	log.Printf("📍 SystemConfig Address: %s", config.SystemConfigAddr.Hex())
-	log.Printf("⚙️  Update Threshold: %.2f%%", config.UpdateThreshold)
-	log.Printf("💎 DA Factor (Celestia): %.2fx (%.0f%% discount)", config.DaFactor, (1-config.DaFactor)*100)
-	log.Printf("🛡️  Safety Margin: %.2fx", config.SafetyMargin)
-	log.Printf("⏱️  Check Interval: %v", config.CheckInterval)
+	log.Printf("[INFO] Connected to L1 (Chain ID: %s)", chainID.String())
+	log.Printf("[INFO] SystemConfig Address: %s", config.SystemConfigAddr.Hex())
+	log.Printf("[CONFIG] Update Threshold: %.2f%%", config.UpdateThreshold)
+	log.Printf("[CONFIG] DA Factor (Celestia): %.2fx (%.0f%% discount)", config.DaFactor, (1-config.DaFactor)*100)
+	log.Printf("[CONFIG] Safety Margin: %.2fx", config.SafetyMargin)
+	log.Printf("[CONFIG] Check Interval: %v", config.CheckInterval)
 
 	// Main loop
 	ticker := time.NewTicker(config.CheckInterval)
@@ -126,49 +126,54 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	// Create SystemConfig contract binding
 	systemConfig, err := bindings.NewSystemConfig(config.SystemConfigAddr, client)
 	if err != nil {
-		log.Printf("❌ Failed to create contract binding: %v", err)
+		log.Printf("[ERROR] Failed to create contract binding: %v", err)
 		return
 	}
 
 	// Fetch current prices
 	ethPrice, tokenPrice, err := getPrices()
 	if err != nil {
-		log.Printf("⚠️  Error fetching prices: %v", err)
+		log.Printf("[WARN] Error fetching prices: %v", err)
 		return
 	}
 
-	log.Printf("💰 Current Prices - ETH: $%.2f, Token: $%.4f", ethPrice, tokenPrice)
+	log.Printf("[PRICE] Current Prices - ETH: $%.2f, Token: $%.4f", ethPrice, tokenPrice)
 
 	// Calculate target scalar
 	if tokenPrice <= 0 {
-		log.Printf("⚠️  Invalid token price (%.4f), skipping update", tokenPrice)
+		log.Printf("[WARN] Invalid token price (%.4f), skipping update", tokenPrice)
 		return
 	}
 
+	// Formula: (ETH_Price / Token_Price) × 1,000,000 × DA_Factor × Safety_Margin
+	// This reflects: token exchange rate → Celestia discount (90%) → sequencer profit margin (10%)
 	ratio := ethPrice / tokenPrice
-	targetScalarFloat := ratio * 1000000 * config.SafetyMargin
+	targetScalarFloat := ratio * 1000000 * config.DaFactor * config.SafetyMargin
 	targetScalar := big.NewInt(int64(targetScalarFloat))
+
+	log.Printf("[CALC] Formula: (%.2f / %.4f) × 1,000,000 × %.2f × %.2f = %s",
+		ethPrice, tokenPrice, config.DaFactor, config.SafetyMargin, targetScalar.String())
 
 	// Apply circuit breaker
 	if targetScalar.Cmp(big.NewInt(MinScalar)) < 0 {
-		log.Printf("⚠️  Target scalar %s below minimum %d, using minimum", targetScalar.String(), MinScalar)
+		log.Printf("[WARN] Target scalar %s below minimum %d, using minimum", targetScalar.String(), MinScalar)
 		targetScalar = big.NewInt(MinScalar)
 	}
 	if targetScalar.Cmp(big.NewInt(MaxScalar)) > 0 {
-		log.Printf("⚠️  Target scalar %s above maximum %d, using maximum", targetScalar.String(), MaxScalar)
+		log.Printf("[WARN] Target scalar %s above maximum %d, using maximum", targetScalar.String(), MaxScalar)
 		targetScalar = big.NewInt(MaxScalar)
 	}
 
 	// Read current gas config from SystemConfig contract
 	currentOverhead, err := systemConfig.Overhead(&bind.CallOpts{Context: ctx})
 	if err != nil {
-		log.Printf("❌ Failed to read overhead from contract: %v", err)
+		log.Printf("[ERROR] Failed to read overhead from contract: %v", err)
 		return
 	}
 
 	currentScalar, err := systemConfig.Scalar(&bind.CallOpts{Context: ctx})
 	if err != nil {
-		log.Printf("❌ Failed to read scalar from contract: %v", err)
+		log.Printf("[ERROR] Failed to read scalar from contract: %v", err)
 		return
 	}
 
@@ -183,46 +188,46 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	changeRateFloat, _ := changeRate.Float64()
 	changeRatePercent := changeRateFloat * 100
 
-	log.Printf("📊 Scalar Analysis - Current: %s, Target: %s, Change: %.2f%%",
+	log.Printf("[ANALYSIS] Scalar Analysis - Current: %s, Target: %s, Change: %.2f%%",
 		currentScalar.String(), targetScalar.String(), changeRatePercent)
 
 	// Check if update is needed
 	if changeRatePercent < config.UpdateThreshold {
-		log.Printf("✅ Scalar is stable, no update needed")
+		log.Printf("[INFO] Scalar is stable, no update needed")
 		return
 	}
 
-	log.Printf("🔄 Update required! Preparing transaction...")
+	log.Printf("[UPDATE] Update required! Preparing transaction...")
 
 	// Create authorized transactor
 	auth, err := bind.NewKeyedTransactorWithChainID(privateKey.(*ecdsa.PrivateKey), chainID)
 	if err != nil {
-		log.Printf("❌ Failed to create transactor: %v", err)
+		log.Printf("[ERROR] Failed to create transactor: %v", err)
 		return
 	}
 
 	// Send transaction to update gas config
 	tx, err := systemConfig.SetGasConfig(auth, currentOverhead, targetScalar)
 	if err != nil {
-		log.Printf("❌ Failed to send transaction: %v", err)
+		log.Printf("[ERROR] Failed to send transaction: %v", err)
 		return
 	}
 
-	log.Printf("✅ Transaction sent: %s", tx.Hash().Hex())
-	log.Printf("⏳ Waiting for confirmation...")
+	log.Printf("[TX] Transaction sent: %s", tx.Hash().Hex())
+	log.Printf("[TX] Waiting for confirmation...")
 
 	// Wait for transaction confirmation
 	receipt, err := bind.WaitMined(ctx, client, tx)
 	if err != nil {
-		log.Printf("❌ Transaction failed: %v", err)
+		log.Printf("[ERROR] Transaction failed: %v", err)
 		return
 	}
 
 	if receipt.Status == 1 {
-		log.Printf("✅ Transaction confirmed! Block: %d, Gas Used: %d", receipt.BlockNumber, receipt.GasUsed)
-		log.Printf("🎉 Scalar successfully updated to: %s", targetScalar.String())
+		log.Printf("[SUCCESS] Transaction confirmed! Block: %d, Gas Used: %d", receipt.BlockNumber, receipt.GasUsed)
+		log.Printf("[SUCCESS] Scalar successfully updated to: %s", targetScalar.String())
 	} else {
-		log.Printf("❌ Transaction reverted!")
+		log.Printf("[ERROR] Transaction reverted!")
 	}
 }
 

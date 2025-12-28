@@ -1,0 +1,59 @@
+global:
+  resolve_timeout: 5m
+
+# Route configuration
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: 'default'
+  routes:
+    # Critical alerts route
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      continue: true
+
+    # Warning alerts route
+    - match:
+        severity: warning
+      receiver: 'warning-alerts'
+      continue: true
+
+# Receivers configuration
+receivers:
+  - name: 'default'
+    # Default receiver (logs only)
+
+  # Critical alerts - send to Slack/Discord
+  - name: 'critical-alerts'
+    # Uncomment and configure when you have webhook URLs
+    # slack_configs:
+    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    #     channel: '#bega-l2-alerts'
+    #     title: 'CRITICAL: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+    # Discord webhook (alternative)
+    # webhook_configs:
+    #   - url: 'YOUR_DISCORD_WEBHOOK_URL'
+    #     send_resolved: true
+
+  # Warning alerts
+  - name: 'warning-alerts'
+    # Uncomment and configure when you have webhook URLs
+    # slack_configs:
+    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
+    #     channel: '#bega-l2-warnings'
+    #     title: 'WARNING: {{ .GroupLabels.alertname }}'
+    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+
+# Inhibition rules
+inhibit_rules:
+  # Inhibit warning if critical alert is firing
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'cluster', 'service']
