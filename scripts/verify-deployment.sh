@@ -4,7 +4,9 @@
 echo "🔍 BEGA L2 배포 검증 시작..."
 echo ""
 
-CONFIG_DIR="/Users/kangmunil/Project/BEGA/config"
+# 프로젝트 루트 디렉토리 설정 (스크립트가 scripts/ 폴더에 있다고 가정)
+PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG_DIR="$PROJECT_ROOT/config"
 
 # 1. 필수 파일 존재 확인
 echo "📁 1. 필수 파일 확인..."
@@ -68,7 +70,7 @@ echo ""
 
 # 4. 시크릿 파일 확인
 echo "🔐 4. 시크릿 파일 확인..."
-SECRETS_DIR="/Users/kangmunil/Project/BEGA/secrets"
+SECRETS_DIR="$PROJECT_ROOT/secrets"
 for file in jwt.txt sequencer.key batcher.key proposer.key; do
     if [ -f "$SECRETS_DIR/$file" ]; then
         SIZE=$(wc -c < "$SECRETS_DIR/$file" | tr -d ' ')
