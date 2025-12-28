@@ -1,0 +1,48 @@
+configType = "custom"
+opDeployerVersion = "v0.0.0-dev"
+l1ChainID = 11155111
+fundDevAccounts = true
+l1ContractsLocator = "embedded"
+l2ContractsLocator = "embedded"
+
+[superchainRoles]
+  SuperchainProxyAdminOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+  SuperchainGuardian = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+  ProtocolVersionsOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+  Challenger = "0x9087F9648694e75F990617481ceA25D0aE037608"
+
+[[chains]]
+  id = "0x0000000000000000000000000000000000000000000000000000000000bc614e"
+  baseFeeVaultRecipient = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  l1FeeVaultRecipient = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  sequencerFeeVaultRecipient = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  operatorFeeVaultRecipient = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  eip1559DenominatorCanyon = 50
+  eip1559Denominator = 50
+  eip1559Elasticity = 6
+  gasLimit = 30000000
+  operatorFeeScalar = 1000000
+  operatorFeeConstant = 0
+  chainFeesRecipient = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  minBaseFee = 1000000000
+  daFootprintGasScalar = 2100
+  [chains.roles]
+    l1ProxyAdminOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+    l2ProxyAdminOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+    systemConfigOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+    unsafeBlockSigner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+    batcher = "0xbB384EF03b7EEe1a7C71F31e7ac1b193f3c5fef9"
+    proposer = "0x9087F9648694e75F990617481ceA25D0aE037608"
+    challenger = "0x9087F9648694e75F990617481ceA25D0aE037608"
+  [chains.customGasToken]
+    address = "0x55B746d21bCEb81374e818C809d0a8145e4Be2e1"
+    name = "BEGA"
+    symbol = "BEGA"
+    decimals = 18
+    liquidityControllerOwner = "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e"
+  [chains.altDA]
+    useGenericCommitment = true
+    daChallengeWindow = 100
+    daResolveWindow = 100
+    daBondSize = 0
+    daResolverRefundPercentage = 0

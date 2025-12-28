@@ -1,0 +1,234 @@
+version: '3.8'
+
+services:
+  # 1. Geth Initialization (runs once to create genesis block)
+  l2-geth-init:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:${OP_GETH_TAG:-latest}
+    command: >
+      init --datadir=/db /config/genesis.json
+    volumes:
+      - ./data:/db
+      - ./config:/config
+    user: "root"
+
+  # 2. Execution Client (op-geth)
+  l2-geth:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:${OP_GETH_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      l2-geth-init:
+        condition: service_completed_successfully
+    ports:
+      - "8545:8545"  # HTTP RPC
+      - "8546:8546"  # WebSocket
+    volumes:
+      - ./data:/db
+      - ./secrets:/secrets
+    command: >
+      --datadir=/db
+      --http --http.addr=0.0.0.0 --http.port=8545 --http.corsdomain="*" --http.vhosts="*" --http.api=web3,debug,eth,txpool,net,engine,miner,admin,personal
+      --ws --ws.addr=0.0.0.0 --ws.port=8546 --ws.api=debug,eth,txpool,net,engine --ws.origins="*"
+      --authrpc.addr=0.0.0.0 --authrpc.port=8551 --authrpc.vhosts="*" --authrpc.jwtsecret=/secrets/jwt.txt
+      --syncmode=full --gcmode=archive --nodiscover --maxpeers=0
+      --networkid=${L2_CHAIN_ID:-12345678}
+      --rollup.disabletxpoolgossip=true
+
+  # 3. Consensus Client (op-node)
+  l2-node:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:${OP_NODE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - l2-geth
+    ports:
+      - "8547:8547"  # Node RPC
+      - "9003:9003"  # P2P
+    volumes:
+      - ./config:/config
+      - ./secrets:/secrets
+    environment:
+      - L1_RPC_URL=${L1_RPC_URL}
+      - OP_NODE_P2P_SEQUENCER_KEY=${SEQUENCER_PRIVATE_KEY}
+    command: >
+      op-node
+      --l1=${L1_RPC_URL}
+      --l1.rpckind=alchemy
+      --l1.beacon=https://ethereum-sepolia-beacon-api.publicnode.com
+      --l2=http://l2-geth:8551
+      --l2.jwt-secret=/secrets/jwt.txt
+      --rollup.config=/config/rollup.json
+      --rpc.addr=0.0.0.0 --rpc.port=8547
+      --sequencer.enabled
+      --sequencer.l1-confs=3
+      --verifier.l1-confs=3
+
+  # 4. Batcher (submits transaction batches to Celestia/L1)
+  l2-batcher:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:${OP_BATCHER_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - l2-node
+    volumes:
+      - ./secrets:/secrets
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - L1_RPC_URL=${L1_RPC_URL}
+      - DA_SERVER_URL=${DA_SERVER_URL}
+      - OP_BATCHER_PRIVATE_KEY=${BATCHER_PRIVATE_KEY}
+    command: >
+      op-batcher
+      --l1-eth-rpc=${L1_RPC_URL}
+      --l2-eth-rpc=http://l2-geth:8545
+      --rollup-rpc=http://l2-node:8547
+      --poll-interval=1s
+      --sub-safety-margin=6
+      --num-confirmations=1
+      --safe-abort-nonce-too-low-count=3
+      --resubmission-timeout=30s
+      --altda.enabled=true
+      --altda.da-service=true
+      --altda.da-server=${DA_SERVER_URL}
+
+  # 5. Proposer (submits L2 state roots to L1)
+  l2-proposer:
+    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-proposer:${OP_PROPOSER_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      - l2-node
+    volumes:
+      - ./secrets:/secrets
+    environment:
+      - L1_RPC_URL=${L1_RPC_URL}
+      - L2OO_ADDRESS=${L2OO_ADDRESS}
+    command: >
+      op-proposer
+      --poll-interval=12s
+      --rpc.port=8560
+      --rollup-rpc=http://l2-node:8547
+      --l2oo-address=${L2OO_ADDRESS}
+      --private-key=/secrets/proposer.key
+      --l1-eth-rpc=${L1_RPC_URL}
+
+  # 6. Gas Price Updater Bot (maintains economic safety)
+  gas-oracle:
+    build:
+      context: ./gas-bot
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - l2-node
+    environment:
+      - L1_RPC_URL=${L1_RPC_URL}
+      - OPERATOR_PRIVATE_KEY=${OPERATOR_PRIVATE_KEY}
+      - SYSTEM_CONFIG_ADDRESS=${SYSTEM_CONFIG_ADDRESS}
+      - UPDATE_THRESHOLD=${UPDATE_THRESHOLD:-5.0}
+      - SAFETY_MARGIN=${SAFETY_MARGIN:-1.1}
+      - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
+      - BINANCE_API_KEY=${BINANCE_API_KEY}
+
+  # 7. Explorer Database (PostgreSQL for Blockscout)
+  explorer-db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=blockscout
+    volumes:
+      - ./data/explorer-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 8. Explorer Cache (Redis for Blockscout)
+  explorer-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 9. BEGAScan (Blockscout Explorer)
+  begascan:
+    image: blockscout/blockscout:latest
+    restart: unless-stopped
+    depends_on:
+      explorer-db:
+        condition: service_healthy
+      explorer-redis:
+        condition: service_healthy
+      l2-geth:
+        condition: service_started
+    ports:
+      - "4000:4000"
+    command: sh -c "bin/blockscout eval \"Elixir.Explorer.ReleaseTasks.create_and_migrate()\" && bin/blockscout start"
+    environment:
+      # Database Configuration
+      - DATABASE_URL=postgresql://postgres:password@explorer-db:5432/blockscout?ssl=false
+
+      # Chain Configuration
+      - ETHEREUM_JSONRPC_VARIANT=geth
+      - ETHEREUM_JSONRPC_HTTP_URL=http://l2-geth:8545
+      - ETHEREUM_JSONRPC_WS_URL=ws://l2-geth:8546
+      - ETHEREUM_JSONRPC_TRACE_URL=http://l2-geth:8545
+
+      # Network Branding
+      - COIN=BEGA
+      - COIN_NAME=BEGA
+      - NETWORK=BEGA L2 Mainnet
+      - SUBNETWORK=BEGA L2
+      - CHAIN_ID=12345678
+
+      # Explorer Configuration
+      - PORT=4000
+      - ECTO_USE_SSL=false
+      - MIX_ENV=dev
+      - SECRET_KEY_BASE=ExM1WVtDhE1IAnpXT2fEGvAArGyG73svJkOhnL8cPWig5AJvBQVFJ+/T6zAGIoRG4F0Qi3qMoEPTdPOvkDRYRA==
+      - BLOCKSCOUT_PROTOCOL=http
+      - BLOCKSCOUT_HOST=localhost
+
+      # Redis Configuration
+      - REDIS_URL=redis://explorer-redis:6379
+
+      # Feature Flags
+      - SHOW_PRICE_CHART=false
+      - DISPLAY_TOKEN_ICONS=false
+      - SHOW_ADDRESS_MARKETCAP_PERCENTAGE=false
+      - INDEXER_DISABLE_PENDING_TRANSACTIONS_FETCHER=true
+
+      # Logo and Branding (Optional - can be customized later)
+      - LOGO=/images/blockscout_logo.svg
+      - LOGO_FOOTER=/images/blockscout_logo.svg
+
+  # 10. BEGAScan Frontend (Blockscout UI)
+  begascan-frontend:
+    image: ghcr.io/blockscout/frontend:latest
+    restart: unless-stopped
+    depends_on:
+      - begascan
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_APP_HOST=localhost
+      - NEXT_PUBLIC_APP_PORT=3000
+      - NEXT_PUBLIC_APP_PROTOCOL=http
+      - NEXT_PUBLIC_API_HOST=begascan
+      - NEXT_PUBLIC_API_PORT=4000
+      - NEXT_PUBLIC_API_PROTOCOL=http
+      - NEXT_PUBLIC_STATS_API_HOST=http://begascan:4000
+      - NEXT_PUBLIC_NETWORK_NAME=BEGA L2 Mainnet
+      - NEXT_PUBLIC_NETWORK_SHORT_NAME=BEGA L2
+      - NEXT_PUBLIC_NETWORK_ID=12345678
+      - NEXT_PUBLIC_NETWORK_CURRENCY_NAME=BEGA
+      - NEXT_PUBLIC_NETWORK_CURRENCY_SYMBOL=BEGA
+      - NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18
+      - NEXT_PUBLIC_API_SPEC_URL=https://raw.githubusercontent.com/blockscout/blockscout-api-v2-swagger/main/swagger.yaml
+
+networks:
+  default:
+    name: bega-l2-network

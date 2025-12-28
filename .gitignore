@@ -1,0 +1,53 @@
+# Environment variables
+.env
+.env.local
+
+# Secrets
+secrets/*.key
+secrets/*.txt
+secrets/*.json
+!secrets/.gitkeep
+
+# Data directories
+data/*
+!data/.gitkeep
+
+# Config (keep templates only)
+config/genesis.json
+config/rollup.json
+config/artifacts.json
+
+# Build outputs
+gas-bot/gas-bot
+gas-bot/bin/
+*.exe
+*.out
+
+# Go
+gas-bot/vendor/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Docker
+.docker/
+
+# Node modules (if using any JS tooling)
+node_modules/

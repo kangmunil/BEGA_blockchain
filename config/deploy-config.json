@@ -1,0 +1,55 @@
+{
+  "comment": "BEGA Prediction Market L2 - OP Stack Configuration with Custom Gas Token & Celestia DA",
+
+  "l1ChainID": 11155111,
+  "l2ChainID": 12345678,
+  "l2BlockTime": 2,
+
+  "l2GenesisBlockGasLimit": "0x1c9c380",
+  "l2GenesisBlockBaseFeePerGas": "0x3b9aca00",
+
+  "finalSystemOwner": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+  "superchainConfigGuardian": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+  "l1SmartContractOwner": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+  "proxyAdminOwner": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+
+  "baseFeeVaultRecipient": "0x9087F9648694e75F990617481ceA25D0aE037608",
+  "l1FeeVaultRecipient": "0x9087F9648694e75F990617481ceA25D0aE037608",
+  "sequencerFeeVaultRecipient": "0x9087F9648694e75F990617481ceA25D0aE037608",
+
+  "gasPriceOracleOverhead": 2100,
+  "gasPriceOracleScalar": 1000000,
+
+  "governanceTokenSymbol": "BEGA",
+  "governanceTokenName": "BEGA",
+  "governanceTokenOwner": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+
+  "p2pSequencerAddress": "0x314cfbF516c7EA668F52Cd02feeCf1Aa4eF1e01e",
+  "batchInboxAddress": "0xbB384EF03b7EEe1a7C71F31e7ac1b193f3c5fef9",
+  "batchSenderAddress": "0xbB384EF03b7EEe1a7C71F31e7ac1b193f3c5fef9",
+  "l2OutputOracleProposer": "0x9087F9648694e75F990617481ceA25D0aE037608",
+  "l2OutputOracleChallenger": "0x9087F9648694e75F990617481ceA25D0aE037608",
+
+  "l1BlockTime": 12,
+
+  "l2GenesisDeltaTimeOffset": "0x0",
+  "l2GenesisEip1559Elasticity": 6,
+  "l2GenesisEip1559Denominator": 50,
+
+  "systemConfigStartBlock": 0,
+
+  "requiredProtocolVersion": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "recommendedProtocolVersion": "0x0000000000000000000000000000000000000000000000000000000000000000",
+
+  "fundDevAccounts": true,
+
+  "useCustomGasToken": true,
+  "customGasTokenAddress": "0x55B746d21bCEb81374e818C809d0a8145e4Be2e1",
+
+  "useAltDA": true,
+  "daCommitmentType": "Generic",
+  "daChallengeWindow": 100,
+  "daResolveWindow": 100,
+  "daBondSize": 0,
+  "daResolverRefundPercentage": 0
+}
