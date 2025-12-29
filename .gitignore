@@ -29,6 +29,12 @@ gas-bot/vendor/
 # Logs
 *.log
 logs/
+*.out
+*.err
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm/_logs/
 
 # OS
 .DS_Store

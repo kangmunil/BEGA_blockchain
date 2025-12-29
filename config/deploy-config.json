@@ -50,6 +50,11 @@
   "daCommitmentType": "Generic",
   "daChallengeWindow": 100,
   "daResolveWindow": 100,
-  "daBondSize": 0,
-  "daResolverRefundPercentage": 0
+  "daBondSize": 1000000000000000000,
+  "daResolverRefundPercentage": 0,
+
+  "faultGameMaxDepth": 4,
+  "faultGameClockExtension": 3600,
+  "faultGameMaxDuration": 604800,
+  "faultGameSplitDepth": 2
 }

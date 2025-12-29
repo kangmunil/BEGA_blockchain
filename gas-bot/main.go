@@ -17,6 +17,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // Configuration constants
@@ -28,6 +30,54 @@ const (
 	MinScalar              = 100000
 	MaxScalar              = 10000000000
 )
+
+// Prometheus metrics
+var (
+	currentScalarGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gas_oracle_current_scalar",
+		Help: "Current scalar value from SystemConfig contract",
+	})
+	targetScalarGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gas_oracle_target_scalar",
+		Help: "Calculated target scalar value",
+	})
+	ethPriceGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gas_oracle_eth_price_usd",
+		Help: "Current ETH price in USD",
+	})
+	tokenPriceGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gas_oracle_token_price_usd",
+		Help: "Current BEGA token price in USD",
+	})
+	scalarUpdateCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gas_oracle_scalar_updates_total",
+		Help: "Total number of scalar updates sent to L1",
+	})
+	scalarUpdateSuccessCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gas_oracle_scalar_updates_success_total",
+		Help: "Total number of successful scalar updates",
+	})
+	scalarUpdateFailureCounter = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "gas_oracle_scalar_updates_failure_total",
+		Help: "Total number of failed scalar updates",
+	})
+	lastUpdateTimestamp = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "gas_oracle_last_update_timestamp",
+		Help: "Unix timestamp of the last successful scalar update",
+	})
+)
+
+func init() {
+	// Register Prometheus metrics
+	prometheus.MustRegister(currentScalarGauge)
+	prometheus.MustRegister(targetScalarGauge)
+	prometheus.MustRegister(ethPriceGauge)
+	prometheus.MustRegister(tokenPriceGauge)
+	prometheus.MustRegister(scalarUpdateCounter)
+	prometheus.MustRegister(scalarUpdateSuccessCounter)
+	prometheus.MustRegister(scalarUpdateFailureCounter)
+	prometheus.MustRegister(lastUpdateTimestamp)
+}
 
 // BinanceTickerResponse represents the response from Binance API
 type BinanceTickerResponse struct {
@@ -48,6 +98,15 @@ type Config struct {
 
 func main() {
 	log.Println("[INIT] BEGA Gas Price Updater Bot Starting...")
+
+	// Start Prometheus metrics server
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		log.Println("[METRICS] Prometheus metrics server listening on :2112")
+		if err := http.ListenAndServe(":2112", nil); err != nil {
+			log.Fatalf("[METRICS] Failed to start metrics server: %v", err)
+		}
+	}()
 
 	// Load configuration
 	config, err := loadConfig()
@@ -137,6 +196,10 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 		return
 	}
 
+	// Update price metrics
+	ethPriceGauge.Set(ethPrice)
+	tokenPriceGauge.Set(tokenPrice)
+
 	log.Printf("[PRICE] Current Prices - ETH: $%.2f, Token: $%.4f", ethPrice, tokenPrice)
 
 	// Calculate target scalar
@@ -177,6 +240,13 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 		return
 	}
 
+	// Update scalar metrics
+	currentScalarFloat, _ := new(big.Float).SetInt(currentScalar).Float64()
+	currentScalarGauge.Set(currentScalarFloat)
+
+	targetScalarFloat64, _ := new(big.Float).SetInt(targetScalar).Float64()
+	targetScalarGauge.Set(targetScalarFloat64)
+
 	// Calculate change rate
 	diff := new(big.Int).Sub(targetScalar, currentScalar)
 	diffAbs := new(big.Int).Abs(diff)
@@ -207,9 +277,11 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	}
 
 	// Send transaction to update gas config
+	scalarUpdateCounter.Inc()
 	tx, err := systemConfig.SetGasConfig(auth, currentOverhead, targetScalar)
 	if err != nil {
 		log.Printf("[ERROR] Failed to send transaction: %v", err)
+		scalarUpdateFailureCounter.Inc()
 		return
 	}
 
@@ -220,14 +292,18 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	receipt, err := bind.WaitMined(ctx, client, tx)
 	if err != nil {
 		log.Printf("[ERROR] Transaction failed: %v", err)
+		scalarUpdateFailureCounter.Inc()
 		return
 	}
 
 	if receipt.Status == 1 {
 		log.Printf("[SUCCESS] Transaction confirmed! Block: %d, Gas Used: %d", receipt.BlockNumber, receipt.GasUsed)
 		log.Printf("[SUCCESS] Scalar successfully updated to: %s", targetScalar.String())
+		scalarUpdateSuccessCounter.Inc()
+		lastUpdateTimestamp.SetToCurrentTime()
 	} else {
 		log.Printf("[ERROR] Transaction reverted!")
+		scalarUpdateFailureCounter.Inc()
 	}
 }
 

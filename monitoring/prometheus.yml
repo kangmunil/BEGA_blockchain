@@ -45,14 +45,14 @@ scrape_configs:
           layer: 'data-availability'
     metrics_path: '/metrics'
 
-  # Gas Oracle Bot (future enhancement)
-  # - job_name: 'gas-oracle'
-  #   static_configs:
-  #     - targets: ['gas-oracle:8080']
-  #       labels:
-  #         service: 'gas-oracle'
-  #         layer: 'automation'
-  #   metrics_path: '/metrics'
+  # Gas Oracle Bot
+  - job_name: 'gas-oracle'
+    static_configs:
+      - targets: ['gas-oracle:2112']
+        labels:
+          service: 'gas-oracle'
+          layer: 'automation'
+    metrics_path: '/metrics'
 
   # Prometheus self-monitoring
   - job_name: 'prometheus'

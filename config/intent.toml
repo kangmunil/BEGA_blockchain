@@ -44,5 +44,5 @@ l2ContractsLocator = "tag://op-contracts/v1.6.0"
     useGenericCommitment = true
     daChallengeWindow = 100
     daResolveWindow = 100
-    daBondSize = 0
+    daBondSize = 1000000000000000000  # 1 ETH (1e18 wei) - CRITICAL: Prevents DA fraud
     daResolverRefundPercentage = 0

@@ -1,5 +1,15 @@
 version: '3.8'
 
+# ============================================
+# Shared Configuration: Log Rotation
+# ============================================
+# Prevents disk exhaustion from infinite Docker logs
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"  # Maximum size per log file
+    max-file: "3"    # Keep 3 rotated files (total: 30MB per container)
+
 services:
   # 1. Geth Initialization (runs once to create genesis block)
   l2-geth-init:
@@ -11,7 +21,19 @@ services:
       - ./config:/config
     user: "root"
 
-  # 2. Execution Client (op-geth)
+  # 2. RPC Gateway (Nginx - DDoS Protection)
+  rpc-gateway:
+    image: nginx:latest
+    restart: unless-stopped
+    depends_on:
+      - l2-geth
+    ports:
+      - "8545:80"  # Public RPC endpoint (proxied to l2-geth)
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    logging: *default-logging
+
+  # 3. Execution Client (op-geth)
   l2-geth:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:${OP_GETH_TAG:-latest}
     restart: unless-stopped
@@ -19,12 +41,13 @@ services:
       l2-geth-init:
         condition: service_completed_successfully
     ports:
-      - "8545:8545"  # HTTP RPC
-      - "8546:8546"  # WebSocket
-      - "6060:6060"  # Metrics
+      - "127.0.0.1:8546:8546"  # WebSocket (localhost only)
+      - "127.0.0.1:6060:6060"  # Metrics (localhost only)
+      # Note: 8545 HTTP RPC is NOT exposed directly - access via rpc-gateway only
     volumes:
       - ./data:/db
       - ./secrets:/secrets
+    logging: *default-logging
     command: >
       --datadir=/db
       --http --http.addr=0.0.0.0 --http.port=8545 --http.corsdomain="*" --http.vhosts="*" --http.api=web3,debug,eth,txpool,net,engine,miner,admin,personal
@@ -35,7 +58,7 @@ services:
       --rollup.disabletxpoolgossip=true
       --metrics --metrics.addr=0.0.0.0 --metrics.port=6060
 
-  # 3. Consensus Client (op-node)
+  # 4. Consensus Client (op-node)
   l2-node:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-node:${OP_NODE_TAG:-latest}
     restart: unless-stopped
@@ -51,6 +74,7 @@ services:
     environment:
       - L1_RPC_URL=${L1_RPC_URL}
       - OP_NODE_P2P_SEQUENCER_KEY=${SEQUENCER_PRIVATE_KEY}
+    logging: *default-logging
     command: >
       op-node
       --l1=${L1_RPC_URL}
@@ -59,13 +83,25 @@ services:
       --l2=http://l2-geth:8551
       --l2.jwt-secret=/secrets/jwt.txt
       --rollup.config=/config/rollup.json
-      --rpc.addr=0.0.0.0 --rpc.port=8547
+      --rpc.addr=0.0.0.0
+      --rpc.port=8547
+      --rpc.enable-admin
       --sequencer.enabled
       --sequencer.l1-confs=3
+      --sequencer.max-safe-lag=1000
       --verifier.l1-confs=3
-      --metrics.enabled --metrics.addr=0.0.0.0 --metrics.port=7300
+      --p2p.disable=false
+      --p2p.listen.tcp=9003
+      --p2p.listen.udp=9003
+      --p2p.advertise.tcp=9003
+      --p2p.advertise.udp=9003
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7300
+      --log.level=info
+      --log.format=json
 
-  # 4. Batcher (submits transaction batches to Celestia/L1)
+  # 5. Batcher (submits transaction batches to Celestia/L1)
   l2-batcher:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:${OP_BATCHER_TAG:-latest}
     restart: unless-stopped
@@ -81,42 +117,76 @@ services:
       - L1_RPC_URL=${L1_RPC_URL}
       - DA_SERVER_URL=${DA_SERVER_URL}
       - OP_BATCHER_PRIVATE_KEY=${BATCHER_PRIVATE_KEY}
+    logging: *default-logging
     command: >
       op-batcher
       --l1-eth-rpc=${L1_RPC_URL}
       --l2-eth-rpc=http://l2-geth:8545
       --rollup-rpc=http://l2-node:8547
-      --poll-interval=1s
-      --sub-safety-margin=6
-      --num-confirmations=1
-      --safe-abort-nonce-too-low-count=3
-      --resubmission-timeout=30s
+      --poll-interval=2s
+      --sub-safety-margin=3
+      --num-confirmations=2
+      --safe-abort-nonce-too-low-count=5
+      --resubmission-timeout=120s
+      --max-channel-duration=15
+      --compression-algo=brotli
       --altda.enabled=true
       --altda.da-service=true
       --altda.da-server=${DA_SERVER_URL}
-      --metrics.enabled --metrics.addr=0.0.0.0 --metrics.port=7301
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7301
+      --log.level=info
+      --log.format=json
 
-  # 5. Proposer (submits L2 state roots to L1)
+  # 6. Proposer (submits L2 state roots to L1 via DisputeGameFactory)
+  # Using local build instead of official image for protocol version compatibility
   l2-proposer:
-    image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-proposer:${OP_PROPOSER_TAG:-latest}
+    image: alpine:latest
     restart: unless-stopped
     depends_on:
       - l2-node
+    ports:
+      - "7302:7302"  # Metrics
     volumes:
       - ./secrets:/secrets
+      - ./bin/op-proposer:/usr/local/bin/op-proposer
     environment:
       - L1_RPC_URL=${L1_RPC_URL}
-      - L2OO_ADDRESS=${L2OO_ADDRESS}
+      - DISPUTE_GAME_FACTORY_ADDRESS=${DISPUTE_GAME_FACTORY_ADDRESS}
+    logging: *default-logging
+    entrypoint: ["/bin/sh", "-c"]
     command: >
-      op-proposer
+      "apk add --no-cache ca-certificates &&
+      /usr/local/bin/op-proposer
       --poll-interval=12s
       --rpc.port=8560
       --rollup-rpc=http://l2-node:8547
-      --l2oo-address=${L2OO_ADDRESS}
-      --private-key=/secrets/proposer.key
       --l1-eth-rpc=${L1_RPC_URL}
+      --private-key=$(cat /secrets/proposer.key)
+      --game-type=0
+      --game-factory-address=${DISPUTE_GAME_FACTORY_ADDRESS}
+      --proposal-interval=120s
+      --metrics.enabled
+      --metrics.addr=0.0.0.0
+      --metrics.port=7302
+      --log.level=info"
 
-  # 6. Gas Price Updater Bot (maintains economic safety)
+  # 7. Celestia Light Node (Alt-DA Layer)
+  celestia-light:
+    image: ghcr.io/celestiaorg/celestia-node:latest
+    restart: unless-stopped
+    ports:
+      - "26658:26658"  # RPC
+    volumes:
+      - ./data/celestia:/home/celestia
+    entrypoint: ["/bin/bash", "-c"]
+    command: >
+      "celestia light init --p2p.network mocha || true &&
+      exec celestia light start
+      --p2p.network mocha"
+
+  # 8. Gas Price Updater Bot (maintains economic safety)
   gas-oracle:
     build:
       context: ./gas-bot
@@ -124,6 +194,8 @@ services:
     restart: unless-stopped
     depends_on:
       - l2-node
+    ports:
+      - "2112:2112"  # Prometheus metrics
     environment:
       - L1_RPC_URL=${L1_RPC_URL}
       - OPERATOR_PRIVATE_KEY=${OPERATOR_PRIVATE_KEY}
@@ -134,8 +206,9 @@ services:
       - CHECK_INTERVAL=${CHECK_INTERVAL:-30}
       - COINGECKO_API_KEY=${COINGECKO_API_KEY}
       - BINANCE_API_KEY=${BINANCE_API_KEY}
+    logging: *default-logging
 
-  # 7. Explorer Database (PostgreSQL for Blockscout)
+  # 9. Explorer Database (PostgreSQL for Blockscout)
   explorer-db:
     image: postgres:15-alpine
     restart: unless-stopped
@@ -151,7 +224,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # 8. Explorer Cache (Redis for Blockscout)
+  # 10. Explorer Cache (Redis for Blockscout)
   explorer-redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -161,7 +234,7 @@ services:
       timeout: 5s
       retries: 5
 
-  # 9. BEGAScan (Blockscout Explorer)
+  # 11. BEGAScan (Blockscout Explorer)
   begascan:
     image: blockscout/blockscout:latest
     restart: unless-stopped
@@ -213,7 +286,7 @@ services:
       - LOGO=/images/blockscout_logo.svg
       - LOGO_FOOTER=/images/blockscout_logo.svg
 
-  # 10. BEGAScan Frontend (Blockscout UI)
+  # 12. BEGAScan Frontend (Blockscout UI)
   begascan-frontend:
     image: ghcr.io/blockscout/frontend:latest
     restart: unless-stopped
@@ -237,7 +310,7 @@ services:
       - NEXT_PUBLIC_NETWORK_CURRENCY_DECIMALS=18
       - NEXT_PUBLIC_API_SPEC_URL=https://raw.githubusercontent.com/blockscout/blockscout-api-v2-swagger/main/swagger.yaml
 
-  # 11. Prometheus (Metrics Collection)
+  # 13. Prometheus (Metrics Collection)
   prometheus:
     image: prom/prometheus:latest
     restart: unless-stopped
@@ -254,7 +327,7 @@ services:
       - '--web.console.templates=/etc/prometheus/consoles'
       - '--web.enable-lifecycle'
 
-  # 12. Alertmanager (Alert Management)
+  # 14. Alertmanager (Alert Management)
   alertmanager:
     image: prom/alertmanager:latest
     restart: unless-stopped
@@ -267,7 +340,7 @@ services:
       - '--config.file=/etc/alertmanager/alertmanager.yml'
       - '--storage.path=/alertmanager'
 
-  # 13. Grafana (Metrics Visualization)
+  # 15. Grafana (Metrics Visualization)
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
@@ -275,6 +348,7 @@ services:
       - "3001:3000"
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards
       - ./data/grafana:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_USER=admin
