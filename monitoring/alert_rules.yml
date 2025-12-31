@@ -1,194 +1,29 @@
-# BEGA L2 Alert Rules - Optimized for Production
-# 실제 운영 환경에 맞게 최적화된 알림 규칙
-
 groups:
-  - name: bega_l2_critical
-    interval: 30s
-    rules:
-      # ========================================
-      # Critical: Batcher ETH Balance Low
-      # ========================================
-      # Batcher 지갑의 ETH 잔고가 부족하면 L1에 배치를 제출할 수 없음
-      # Sepolia 기준: 0.05 ETH, Mainnet 기준: 0.5 ETH 권장
-      - alert: BatcherLowETH
-        expr: op_batcher_default_balance < 0.05
-        for: 5m
-        labels:
-          severity: critical
-          component: batcher
-        annotations:
-          summary: "🚨 Batcher ETH 잔고 부족"
-          description: "Batcher 지갑 잔고가 {{ $value }} ETH로 매우 낮습니다. 즉시 충전이 필요합니다. (권장: 0.1 ETH 이상)"
+- name: BEGA_L2_Alerts
+  rules:
+  - alert: BatcherLowBalance
+    expr: eth_balance{address="0xbB384EF03b7EEe1a7C71F31e7ac1b193f3c5fef9"} < 0.1
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Batcher account low balance"
+      description: "Batcher address 0xbB38... has less than 0.1 ETH on L1."
 
-      # ========================================
-      # Critical: Batcher Very Low ETH (Warning before Critical)
-      # ========================================
-      - alert: BatcherVeryLowETH
-        expr: op_batcher_default_balance < 0.1
-        for: 10m
-        labels:
-          severity: warning
-          component: batcher
-        annotations:
-          summary: "⚠️ Batcher ETH 잔고 경고"
-          description: "Batcher 지갑 잔고가 {{ $value }} ETH입니다. 곧 충전이 필요합니다."
+  - alert: BatchSubmissionFailed
+    expr: batcher_batch_submit_failure_count > 0
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: "Batch submission failures detected"
+      description: "Batcher is failing to submit batches to DA/L1."
 
-      # ========================================
-      # Critical: L2 Geth Node Down
-      # ========================================
-      - alert: L2GethDown
-        expr: up{job="l2-geth"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: l2-geth
-        annotations:
-          summary: "🚨 L2 Geth 노드 다운"
-          description: "L2 Geth 실행 레이어가 응답하지 않습니다. 사용자가 트랜잭션을 제출할 수 없습니다."
-
-      # ========================================
-      # Critical: L2 Rollup Node Down
-      # ========================================
-      - alert: L2NodeDown
-        expr: up{job="l2-node"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: l2-node
-        annotations:
-          summary: "🚨 L2 Rollup 노드 다운"
-          description: "L2 합의/롤업 노드가 응답하지 않습니다. 체인이 새로운 L2 블록을 생성하지 못할 수 있습니다."
-
-      # ========================================
-      # Critical: Batcher Service Down
-      # ========================================
-      - alert: BatcherDown
-        expr: up{job="l2-batcher"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: l2-batcher
-        annotations:
-          summary: "🚨 Batcher 서비스 다운"
-          description: "Batcher가 실행되지 않고 있습니다. L2 트랜잭션이 L1에 게시되지 않습니다."
-
-      # ========================================
-      # Critical: Batcher Transaction Pending Too Long
-      # ========================================
-      # Batcher가 트랜잭션을 제출했지만 10분 이상 pending 상태
-      - alert: BatcherTxStuck
-        expr: op_batcher_default_txmgr_pending_txs > 0
-        for: 10m
-        labels:
-          severity: critical
-          component: batcher
-        annotations:
-          summary: "🚨 Batcher 트랜잭션 지연"
-          description: "Batcher에 {{ $value }}개의 pending 트랜잭션이 10분 이상 대기 중입니다. L1 가스비를 확인하세요."
-
-  - name: bega_l2_warning
-    interval: 60s
-    rules:
-      # ========================================
-      # Warning: High L1 Gas Price
-      # ========================================
-      # Sepolia 기준: 20 gwei, Mainnet 기준: 50-100 gwei
-      - alert: HighL1GasPrice
-        expr: op_batcher_default_txmgr_basefee_wei / 1e9 > 20
-        for: 10m
-        labels:
-          severity: warning
-          component: batcher
-        annotations:
-          summary: "⚠️ L1 가스비 높음"
-          description: "L1 가스비가 {{ $value }} gwei로 높습니다. 배치 제출 비용이 증가하고 있습니다."
-
-      # ========================================
-      # Warning: L2 Block Production Slow
-      # ========================================
-      # BEGA L2는 2초마다 블록 생성 예상 (0.5 blocks/sec)
-      - alert: L2BlockProductionSlow
-        expr: rate(eth_block_number{job="l2-geth"}[5m]) < 0.3
-        for: 5m
-        labels:
-          severity: warning
-          component: l2-geth
-        annotations:
-          summary: "⚠️ L2 블록 생성 속도 저하"
-          description: "L2가 {{ $value | humanize }} blocks/sec 속도로 블록을 생성하고 있습니다. (예상: ~0.5 blocks/sec)"
-
-      # ========================================
-      # Warning: High Memory Usage
-      # ========================================
-      # 8GB 이상 메모리 사용 시 경고
-      - alert: HighMemoryUsage
-        expr: process_resident_memory_bytes{job=~"l2-geth|l2-node|l2-batcher"} > 8e9
-        for: 15m
-        labels:
-          severity: warning
-        annotations:
-          summary: "⚠️ 높은 메모리 사용량"
-          description: "{{ $labels.job }} 프로세스가 {{ $value | humanize }}B의 메모리를 사용 중입니다."
-
-      # ========================================
-      # Warning: Batcher Channel Queue High
-      # ========================================
-      # Batcher의 채널 큐가 쌓이면 배치 제출이 지연될 수 있음
-      - alert: BatcherChannelQueueHigh
-        expr: op_batcher_default_channel_queue_length > 10
-        for: 5m
-        labels:
-          severity: warning
-          component: batcher
-        annotations:
-          summary: "⚠️ Batcher 채널 큐 누적"
-          description: "Batcher 채널 큐에 {{ $value }}개의 채널이 대기 중입니다."
-
-      # ========================================
-      # Warning: High CPU Usage
-      # ========================================
-      - alert: HighCPUUsage
-        expr: rate(process_cpu_seconds_total{job=~"l2-geth|l2-node|l2-batcher"}[5m]) > 0.8
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "⚠️ 높은 CPU 사용률"
-          description: "{{ $labels.job }} 프로세스의 CPU 사용률이 {{ $value | humanizePercentage }}입니다."
-
-  - name: bega_l2_info
-    interval: 120s
-    rules:
-      # ========================================
-      # Info: Batcher Transaction Submitted
-      # ========================================
-      # 최근 30분간 배치 제출이 없으면 알림 (정상 동작 확인용)
-      - alert: NoRecentBatchSubmission
-        expr: (time() - op_batcher_default_last_batcher_tx_unix) > 1800
-        for: 5m
-        labels:
-          severity: info
-          component: batcher
-        annotations:
-          summary: "ℹ️ 최근 배치 제출 없음"
-          description: "최근 30분간 Batcher가 배치를 제출하지 않았습니다. 트랜잭션이 없거나 문제가 있을 수 있습니다."
-
-      # ========================================
-      # Info: Low Transaction Activity
-      # ========================================
-      # 트랜잭션 풀이 1시간 동안 비어있으면 알림
-      - alert: LowTransactionActivity
-        expr: eth_txpool_pending{job="l2-geth"} == 0
-        for: 1h
-        labels:
-          severity: info
-          component: l2-geth
-        annotations:
-          summary: "ℹ️ 낮은 트랜잭션 활동"
-          description: "1시간 동안 pending 트랜잭션이 없습니다. 네트워크 활동이 매우 낮습니다."
-
-# ========================================
-# 주석: 시퀀서 모드에서는 필요 없는 알림
-# ========================================
-# LowPeerCount - 시퀀서 모드에서는 P2P 피어가 필요 없으므로 제거됨
-# 향후 검증자 노드를 추가할 경우 이 알림을 다시 활성화할 것
+  - alert: GasOracleStale
+    expr: time() - gas_oracle_last_update_timestamp > 120
+    for: 2m
+    labels:
+      severity: warning
+    annotations:
+      summary: "Gas Oracle outdated"
+      description: "Gas Oracle has not updated L1 scalar for over 2 minutes."

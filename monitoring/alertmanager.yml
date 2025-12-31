@@ -1,92 +1,14 @@
 global:
   resolve_timeout: 5m
 
-# Route configuration
 route:
-  group_by: ['alertname', 'cluster', 'service']
+  group_by: ['alertname']
   group_wait: 10s
   group_interval: 10s
-  repeat_interval: 12h
-  receiver: 'default'
-  routes:
-    # Critical alerts route
-    - match:
-        severity: critical
-      receiver: 'critical-alerts'
-      continue: true
+  repeat_interval: 1h
+  receiver: 'web.hook'
 
-    # Warning alerts route
-    - match:
-        severity: warning
-      receiver: 'warning-alerts'
-      continue: true
-
-# Receivers configuration
 receivers:
-  - name: 'default'
-    # Default receiver (logs only)
-
-  # Critical alerts - send to Slack/Discord/Telegram
-  - name: 'critical-alerts'
-    # Slack configuration
-    # slack_configs:
-    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
-    #     channel: '#bega-l2-alerts'
-    #     title: 'CRITICAL: {{ .GroupLabels.alertname }}'
-    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
-
-    # Discord webhook
-    # webhook_configs:
-    #   - url: 'YOUR_DISCORD_WEBHOOK_URL'
-    #     send_resolved: true
-
-    # Telegram configuration (추천)
-    # telegram_configs:
-    #   - bot_token: 'YOUR_BOT_TOKEN'  # 예: 123456789:ABCdefGHIjklMNOpqrsTUVwxyz
-    #     chat_id: YOUR_CHAT_ID  # 예: 123456789 (개인) 또는 -100123456789 (그룹)
-    #     send_resolved: true
-    #     parse_mode: 'HTML'
-    #     message: |
-    #       🚨 <b>CRITICAL ALERT</b> 🚨
-    #
-    #       <b>{{ .GroupLabels.alertname }}</b>
-    #
-    #       {{ range .Alerts }}
-    #       <b>컴포넌트:</b> {{ .Labels.component }}
-    #       <b>설명:</b> {{ .Annotations.description }}
-    #
-    #       ⏰ {{ .StartsAt.Format "2006-01-02 15:04:05" }}
-    #       {{ end }}
-
-  # Warning alerts
-  - name: 'warning-alerts'
-    # Slack configuration
-    # slack_configs:
-    #   - api_url: 'YOUR_SLACK_WEBHOOK_URL'
-    #     channel: '#bega-l2-warnings'
-    #     title: 'WARNING: {{ .GroupLabels.alertname }}'
-    #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
-
-    # Telegram configuration (추천)
-    # telegram_configs:
-    #   - bot_token: 'YOUR_BOT_TOKEN'
-    #     chat_id: YOUR_CHAT_ID
-    #     send_resolved: true
-    #     parse_mode: 'HTML'
-    #     message: |
-    #       ⚠️ <b>WARNING</b>
-    #
-    #       <b>{{ .GroupLabels.alertname }}</b>
-    #
-    #       {{ range .Alerts }}
-    #       <b>설명:</b> {{ .Annotations.description }}
-    #       {{ end }}
-
-# Inhibition rules
-inhibit_rules:
-  # Inhibit warning if critical alert is firing
-  - source_match:
-      severity: 'critical'
-    target_match:
-      severity: 'warning'
-    equal: ['alertname', 'cluster', 'service']
+- name: 'web.hook'
+  webhook_configs:
+  - url: 'http://127.0.0.1:5001/'  # Placeholder for local listener or Slack/Discord

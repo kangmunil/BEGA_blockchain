@@ -37,9 +37,6 @@ services:
   l2-geth:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-geth:${OP_GETH_TAG:-latest}
     restart: unless-stopped
-    depends_on:
-      l2-geth-init:
-        condition: service_completed_successfully
     ports:
       - "127.0.0.1:8546:8546"  # WebSocket (localhost only)
       - "127.0.0.1:6060:6060"  # Metrics (localhost only)
@@ -101,28 +98,26 @@ services:
       --log.level=info
       --log.format=json
 
-  # 5. Batcher (submits transaction batches to Celestia/L1)
+  # 5. Batcher (submits transaction batches to L1)
   l2-batcher:
     image: us-docker.pkg.dev/oplabs-tools-artifacts/images/op-batcher:${OP_BATCHER_TAG:-latest}
     restart: unless-stopped
     depends_on:
       - l2-node
-    ports:
-      - "7301:7301"  # Metrics
+    network_mode: host
     volumes:
       - ./secrets:/secrets
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
       - L1_RPC_URL=${L1_RPC_URL}
-      - DA_SERVER_URL=${DA_SERVER_URL}
       - OP_BATCHER_PRIVATE_KEY=${BATCHER_PRIVATE_KEY}
     logging: *default-logging
     command: >
       op-batcher
       --l1-eth-rpc=${L1_RPC_URL}
-      --l2-eth-rpc=http://l2-geth:8545
-      --rollup-rpc=http://l2-node:8547
+      --l2-eth-rpc=http://127.0.0.1:8545
+      --rollup-rpc=http://127.0.0.1:8547
       --poll-interval=2s
       --sub-safety-margin=3
       --num-confirmations=2
@@ -130,9 +125,8 @@ services:
       --resubmission-timeout=120s
       --max-channel-duration=15
       --compression-algo=brotli
-      --altda.enabled=true
-      --altda.da-service=true
-      --altda.da-server=${DA_SERVER_URL}
+      --rpc.addr=0.0.0.0
+      --rpc.port=8548
       --metrics.enabled
       --metrics.addr=0.0.0.0
       --metrics.port=7301
@@ -172,20 +166,6 @@ services:
       --metrics.port=7302
       --log.level=info"
 
-  # 7. Celestia Light Node (Alt-DA Layer)
-  celestia-light:
-    image: ghcr.io/celestiaorg/celestia-node:latest
-    restart: unless-stopped
-    ports:
-      - "26658:26658"  # RPC
-    volumes:
-      - ./data/celestia:/home/celestia
-    entrypoint: ["/bin/bash", "-c"]
-    command: >
-      "celestia light init --p2p.network mocha || true &&
-      exec celestia light start
-      --p2p.network mocha"
-
   # 8. Gas Price Updater Bot (maintains economic safety)
   gas-oracle:
     build:
@@ -198,8 +178,10 @@ services:
       - "2112:2112"  # Prometheus metrics
     environment:
       - L1_RPC_URL=${L1_RPC_URL}
+      - L2_RPC_URL=http://l2-geth:8545
       - OPERATOR_PRIVATE_KEY=${OPERATOR_PRIVATE_KEY}
       - SYSTEM_CONFIG_ADDRESS=${SYSTEM_CONFIG_ADDRESS}
+      - UNISWAP_PAIR_ADDRESS=0x1D95686f251289e2F3A91c9372013aFdDA2E669F
       - UPDATE_THRESHOLD=${UPDATE_THRESHOLD:-5.0}
       - DA_FACTOR=${DA_FACTOR:-0.1}
       - SAFETY_MARGIN=${SAFETY_MARGIN:-1.1}

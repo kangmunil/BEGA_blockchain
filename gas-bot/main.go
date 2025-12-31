@@ -88,8 +88,10 @@ type BinanceTickerResponse struct {
 // Config holds bot configuration
 type Config struct {
 	L1RpcURL           string
+	L2RpcURL           string
 	OperatorPrivateKey string
 	SystemConfigAddr   common.Address
+	UniswapPairAddr    common.Address
 	UpdateThreshold    float64
 	DaFactor           float64 // Celestia DA discount factor (0.1 = 10% of ETH cost)
 	SafetyMargin       float64 // Sequencer profit margin (1.1 = 10% profit)
@@ -115,11 +117,18 @@ func main() {
 	}
 
 	// Connect to L1
-	client, err := ethclient.Dial(config.L1RpcURL)
+	l1Client, err := ethclient.Dial(config.L1RpcURL)
 	if err != nil {
 		log.Fatalf("Failed to connect to L1 RPC: %v", err)
 	}
-	defer client.Close()
+	defer l1Client.Close()
+
+	// Connect to L2
+	l2Client, err := ethclient.Dial(config.L2RpcURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to L2 RPC: %v", err)
+	}
+	defer l2Client.Close()
 
 	// Load operator wallet
 	privateKey, err := crypto.HexToECDSA(config.OperatorPrivateKey)
@@ -128,13 +137,15 @@ func main() {
 	}
 
 	// Get chain ID
-	chainID, err := client.ChainID(context.Background())
+	chainID, err := l1Client.ChainID(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to get chain ID: %v", err)
 	}
 
 	log.Printf("[INFO] Connected to L1 (Chain ID: %s)", chainID.String())
+	log.Printf("[INFO] Connected to L2 RPC: %s", config.L2RpcURL)
 	log.Printf("[INFO] SystemConfig Address: %s", config.SystemConfigAddr.Hex())
+	log.Printf("[INFO] Uniswap Pair Address: %s", config.UniswapPairAddr.Hex())
 	log.Printf("[CONFIG] Update Threshold: %.2f%%", config.UpdateThreshold)
 	log.Printf("[CONFIG] DA Factor (Celestia): %.2fx (%.0f%% discount)", config.DaFactor, (1-config.DaFactor)*100)
 	log.Printf("[CONFIG] Safety Margin: %.2fx", config.SafetyMargin)
@@ -145,17 +156,18 @@ func main() {
 	defer ticker.Stop()
 
 	// Run immediately on startup
-	runUpdate(client, privateKey, chainID, config)
+	runUpdate(l1Client, l2Client, privateKey, chainID, config)
 
 	// Then run on interval
 	for range ticker.C {
-		runUpdate(client, privateKey, chainID, config)
+		runUpdate(l1Client, l2Client, privateKey, chainID, config)
 	}
 }
 
 func loadConfig() (*Config, error) {
 	config := &Config{
 		L1RpcURL:           getEnv("L1_RPC_URL", ""),
+		L2RpcURL:           getEnv("L2_RPC_URL", "http://l2-geth:8545"), // Default to internal docker DNS
 		OperatorPrivateKey: getEnv("OPERATOR_PRIVATE_KEY", ""),
 		UpdateThreshold:    getEnvFloat("UPDATE_THRESHOLD", DefaultUpdateThreshold),
 		DaFactor:           getEnvFloat("DA_FACTOR", DefaultDaFactor),
@@ -169,6 +181,10 @@ func loadConfig() (*Config, error) {
 	}
 	config.SystemConfigAddr = common.HexToAddress(systemConfigStr)
 
+	// Default to known pair if not set (for dev convenience)
+	uniswapPairStr := getEnv("UNISWAP_PAIR_ADDRESS", "0x1D95686f251289e2F3A91c9372013aFdDA2E669F")
+	config.UniswapPairAddr = common.HexToAddress(uniswapPairStr)
+
 	if config.L1RpcURL == "" {
 		return nil, fmt.Errorf("L1_RPC_URL not set")
 	}
@@ -179,18 +195,18 @@ func loadConfig() (*Config, error) {
 	return config, nil
 }
 
-func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.Int, config *Config) {
+func runUpdate(l1Client *ethclient.Client, l2Client *ethclient.Client, privateKey interface{}, chainID *big.Int, config *Config) {
 	ctx := context.Background()
 
 	// Create SystemConfig contract binding
-	systemConfig, err := bindings.NewSystemConfig(config.SystemConfigAddr, client)
+	systemConfig, err := bindings.NewSystemConfig(config.SystemConfigAddr, l1Client)
 	if err != nil {
 		log.Printf("[ERROR] Failed to create contract binding: %v", err)
 		return
 	}
 
 	// Fetch current prices
-	ethPrice, tokenPrice, err := getPrices()
+	ethPrice, tokenPrice, err := getPrices(l2Client, config.UniswapPairAddr)
 	if err != nil {
 		log.Printf("[WARN] Error fetching prices: %v", err)
 		return
@@ -289,7 +305,7 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	log.Printf("[TX] Waiting for confirmation...")
 
 	// Wait for transaction confirmation
-	receipt, err := bind.WaitMined(ctx, client, tx)
+	receipt, err := bind.WaitMined(ctx, l1Client, tx)
 	if err != nil {
 		log.Printf("[ERROR] Transaction failed: %v", err)
 		scalarUpdateFailureCounter.Inc()
@@ -307,20 +323,46 @@ func runUpdate(client *ethclient.Client, privateKey interface{}, chainID *big.In
 	}
 }
 
-func getPrices() (float64, float64, error) {
+func getPrices(l2Client *ethclient.Client, pairAddr common.Address) (float64, float64, error) {
 	// Fetch ETH price from Binance
 	ethPrice, err := fetchBinancePrice("ETHUSDT")
 	if err != nil {
-		return 0, 0, fmt.Errorf("failed to fetch ETH price: %w", err)
+		// Fallback for dev/offline
+		log.Printf("[WARN] Binance API failed, using fallback ETH price: %v", err)
+		ethPrice = 3000.0
 	}
 
-	// TODO: Fetch actual token price
-	// For now, using a mock value
-	// You would fetch this from:
-	// 1. Coingecko API if token is listed
-	// 2. DEX pool contract (Uniswap/Sushiswap)
-	// 3. Internal price oracle
-	tokenPrice := 0.5 // Mock: $0.50
+	// Fetch token reserves from Uniswap Pair on L2
+	pair, err := bindings.NewUniswapV2Pair(pairAddr, l2Client)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to bind pair: %w", err)
+	}
+
+	reserves, err := pair.GetReserves(&bind.CallOpts{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get reserves: %w", err)
+	}
+
+	// Reserve0 = MockETH (Address 0xDc...)
+	// Reserve1 = WBEGA (Address 0xe7...)
+	// Ensure we know which is which. 
+	// In AddLiquidity: MockETH(tokenA), WBEGA(tokenB).
+	// Sort order: 0xDc... < 0xe7...
+	// So Reserve0 is ETH, Reserve1 is BEGA.
+	
+	r0, _ := new(big.Float).SetInt(reserves.Reserve0).Float64()
+	r1, _ := new(big.Float).SetInt(reserves.Reserve1).Float64()
+
+	if r0 == 0 || r1 == 0 {
+		return 0, 0, fmt.Errorf("empty reserves")
+	}
+
+	// Price of 1 BEGA in ETH = Reserve0 (ETH) / Reserve1 (BEGA)
+	// Price in USD = (ReserveETH / ReserveBEGA) * ethPrice
+	// Example: 5 ETH / 5000 BEGA = 0.001 ETH/BEGA. If ETH=$3000, BEGA=$3.00.
+	
+	begaPriceInEth := r0 / r1
+	tokenPrice := begaPriceInEth * ethPrice
 
 	return ethPrice, tokenPrice, nil
 }
